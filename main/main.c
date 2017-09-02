@@ -29,7 +29,7 @@
 #include "hal_i2c.h"
 #include "hal_i2s.h"
 #include "wm8978.h"
-#include "baidu_rest.h"
+#include "record_task.h"
 #include "http.h"
 #include "cJSON.h"
 
@@ -84,7 +84,7 @@ void app_main()
         ESP_LOGI(TAG, "~~~~~~~~~~~");
     }
 
-    xTaskCreate(baidu_rest_task, "asr_task", 4096, NULL, 5, NULL);
+    xTaskCreate(record_task, "record_task", 4096, NULL, 5, NULL);
         //xEventGroupWaitBits(eth_event_group,ETH_DISCONNECTED_BIT,pdTRUE,pdTRUE,portMAX_DELAY);
     //}while(1);
     //if(create_tcp_server(8080)!=ESP_OK){

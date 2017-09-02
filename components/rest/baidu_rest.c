@@ -20,13 +20,10 @@
 #include "http_parser.h"
 #include "url_parser.h"
 #include "mbedtls/base64.h"
+#include "spiram_fifo.h"
 
 #define TAG "REST:"
 
-static uint8_t vad_check(int16_t* data,uint32_t lenght);
-
-#define GPIO_OUTPUT_IO_0    16
-#define GPIO_OUTPUT_PIN_SEL  ((1<<GPIO_OUTPUT_IO_0))
 
 uint32_t http_body_length=0;
 char* http_body=NULL;
@@ -89,17 +86,9 @@ static http_parser_settings settings_null =
 
 #define MAX_LENGTH 8*1000*16*10  //base64 8k 16bits 40s 
 const char* stream_head="{\"format\":\"wav\",\"cuid\":\"esp32_whyengineer\",\"token\":\"24.44810154581d4b7e8cc3554c90b949f0.2592000.1505980562.282335-10037482\",\"rate\":8000,\"channel\":1,\"speech\":\"";//","len":0,}"
-const char* stream_len="\",\"len\":";
-const char* stream_tail="}";
 static int baid_http_post(http_parser_settings *callbacks, void *user_data)
 {
     url_t *url = url_parse("http://vop.baidu.com/server_api");
-    FILE* f = fopen("/sdcard/record.wav", "r");
-    fseek(f,sizeof(WAV_HEADER),SEEK_SET);
-    if (f == NULL) {
-        ESP_LOGE(TAG,"Failed to open file for writing");
-        return ESP_FAIL;
-    }
     const struct addrinfo hints = {
         .ai_family = AF_INET,
         .ai_socktype = SOCK_STREAM,
@@ -147,7 +136,7 @@ static int baid_http_post(http_parser_settings *callbacks, void *user_data)
     uint32_t length=MAX_LENGTH;
     // write http request
     char *request;
-    if(asprintf(&request, "POST %s HTTP/1.0\r\nHost: %s:%d\r\nContent-Length: %d\r\nUser-Agent: ESP32\r\nAccept: */*\r\n\r\n", url->path, url->host, url->port,length) < 0)
+    if(asprintf(&request, "POST %s HTTP/1.1\r\nHost: %s:%d\r\nTransfer-Encoding: chunked\r\nUser-Agent: ESP32\r\nAccept: */*\r\n\r\n", url->path, url->host, url->port) < 0)
     {
         return ESP_FAIL;
     }
@@ -162,13 +151,14 @@ static int baid_http_post(http_parser_settings *callbacks, void *user_data)
     free(request);
     ESP_LOGI(TAG, "... socket send success");
    	uint32_t w,r;
+    char chunk_len[6];
    	//stream head
    	printf("%s",stream_head );
-   	w=write(sock, stream_head, strlen(stream_head));
-   	if(w==strlen(stream_head)){
-   		length-=w;
-   		ESP_LOGI(TAG, "#head success");
-   	}
+    sprintf(chunk_len,"%x\r\n",strlen(stream_head));
+    write(sock, chunk_len, strlen(chunk_len));
+   	write(sock, stream_head, strlen(stream_head));
+    write(sock, "\r\n",2);
+   	ESP_LOGI(TAG, "#head success");
     //loop write
     uint32_t wav_len=0;
     uint32_t olen=0;
@@ -182,61 +172,33 @@ static int baid_http_post(http_parser_settings *callbacks, void *user_data)
     	ESP_LOGE(TAG,"read_buf malloc failed!");
     	return ESP_FAIL;
     }
-    do{
-    	r=fread(read_buf,1,1026,f);
-    	wav_len+=r;
-    	if(mbedtls_base64_encode(dst_buf,1369,&olen,read_buf,r)){
+    extern int32_t record_cnt;
+    while(record_cnt){
+    	spiRamFifoRead((char*)read_buf, 1026);
+    	wav_len+=1026;
+    	if(mbedtls_base64_encode(dst_buf,1369,&olen,read_buf,1026)){
     		ESP_LOGE(TAG,"base64 encode failed!");
     		ESP_LOGE(TAG,"olen:%d",olen);
     	}
-    	printf("%s",dst_buf);
-    	w=write(sock, dst_buf, olen);
-	   	if(w==olen){
-	   		length-=w;
-	   	}
-    }while(r>0);
+      sprintf(chunk_len,"%x\r\n",olen);
+      write(sock, chunk_len, strlen(chunk_len));
+    	write(sock, dst_buf, olen);
+      write(sock, "\r\n",2);
+      //printf("%s",dst_buf);
+    }
     ESP_LOGI(TAG, "#loop success");
-   	fclose(f);
    	free(read_buf);
    	free(dst_buf);
    	//steaem len
+    char stream_len[30];
+    sprintf(stream_len,"\",\"len\":%d}",wav_len);
    	printf("%s",stream_len);
-   	w=write(sock, stream_len, strlen(stream_len));
-   	if(w==strlen(stream_len)){
-   		length-=w;
-   		ESP_LOGI(TAG, "#len success");
-   	}
-   	//wav len
-   	char *p_wav_len;
-   	if(asprintf(&p_wav_len, "%d",wav_len) < 0)
-    {
-        return ESP_FAIL;
-    }
-    printf("%s",p_wav_len);
-    w=write(sock, p_wav_len, strlen(p_wav_len));
-   	if(w==strlen(p_wav_len)){
-   		length-=w;
-   		ESP_LOGI(TAG, "#wav_len success");
-   	}
-   	free(p_wav_len);
-   	//stream tail
-   	printf("%s",stream_tail);
-   	w=write(sock, stream_tail, strlen(stream_tail));
-   	if(w==strlen(stream_tail)){
-   		length-=w;
-   		ESP_LOGI(TAG, "#tail success");
-   	}
-   	//complete the length
-   	uint8_t *temp=malloc(1024); //1026/3=342
-   	memset(temp,0,1024);
-   	for(int i=(length-1024);i>0;i=i-1024){
-   		write(sock,temp,1024);
-   		length-=1024;
-   	}
-   	ESP_LOGI(TAG, "##length%d",length);
-   	write(sock,temp,length);
-   	ESP_LOGI(TAG, "#http end");
-   	free(temp);
+    sprintf(chunk_len,"%x\r\n",strlen(stream_len));
+    write(sock, chunk_len, strlen(chunk_len));
+   	write(sock, stream_len, strlen(stream_len));
+    write(sock, "\r\n0\r\n\r\n",7);
+   	ESP_LOGI(TAG, "#http send ok");
+
     /* Read HTTP response */
     char recv_buf[64];
     bzero(recv_buf, sizeof(recv_buf));
@@ -293,7 +255,7 @@ int start_record_audio(){
 	char* data=malloc(1024);
 	uint8_t vad_cnt=0;
 	int16_t* value=(int16_t*)data;
-	gpio_set_level(GPIO_OUTPUT_IO_0,1);
+	
 	while(1){
 		hal_i2s_read(0,data,1024,portMAX_DELAY);
 		if(vad_check(value,512)==0)
@@ -304,7 +266,6 @@ int start_record_audio(){
 			break;
 		w=fwrite(data,1,1024,f);
 	}
-	gpio_set_level(GPIO_OUTPUT_IO_0,0);
 	int n=ftell(f);
 	ESP_LOGI(TAG,"flle lenght:%d",n);
 	fseek(f, 0, SEEK_SET);
@@ -353,7 +314,7 @@ static int32_t sign(int32_t a){
 	else
 		return 0;
 }
-static uint8_t vad_check(int16_t* data,uint32_t lenght){
+uint8_t vad_check(int16_t* data,uint32_t lenght){
 	int sum=0;
 	int delta_sum=0;
 	for(int i=0;i<lenght-1;i++){
@@ -378,57 +339,32 @@ static uint8_t vad_check(int16_t* data,uint32_t lenght){
 }
 void baidu_rest_task(void *pvParameters)
 {
-    hal_i2c_init(0,5,17);
-    hal_i2s_init(0,8000,16,1); //8k 16bit 1 channel
-    WM8978_Init();
-    WM8978_ADDA_Cfg(1,1); 
-    WM8978_Input_Cfg(1,0,0);     
-    WM8978_Output_Cfg(1,0); 
-    WM8978_MIC_Gain(35);
-    WM8978_AUX_Gain(0);
-    WM8978_LINEIN_Gain(0);
-    WM8978_SPKvol_Set(0);
-    WM8978_HPvol_Set(20,20);
-    WM8978_EQ_3D_Dir(1);
-    WM8978_EQ1_Set(0,24);
-    WM8978_EQ2_Set(0,24);
-    WM8978_EQ3_Set(0,24);
-    WM8978_EQ4_Set(0,24);
-    WM8978_EQ5_Set(0,0);
-
-
-	gpio_config_t io_conf;
-    io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    io_conf.pull_down_en = 0;
-    io_conf.pull_up_en = 0;
-    gpio_config(&io_conf);
- 	//gpio_set_level(GPIO_OUTPUT_IO_0,1);
-    ESP_LOGI(TAG, "baidu_rest task start");
-    //char* json=baidu_rest_input("",0);
-    //printf("%s\n", json);
-    char *sample_data=malloc(1024);
-    int16_t* value=(int16_t*)sample_data;
     
-    if(sample_data==NULL){
-   		ESP_LOGE(TAG, "sample_data malloc failed");
-   		vTaskSuspend(NULL);
-   	}
-    //
-    uint8_t vad_cnt=0;
-    for(;;){
-    	hal_i2s_read(0,sample_data,1024,portMAX_DELAY);
-        if(vad_check(value,512)==1)
-        	vad_cnt++;
-        else
-        	vad_cnt=0;
-        if(vad_cnt==4){
-        	start_record_audio();
-        	break;
-        }
+ 	// //gpio_set_level(GPIO_OUTPUT_IO_0,1);
+  //   ESP_LOGI(TAG, "baidu_rest task start");
+  //   //char* json=baidu_rest_input("",0);
+  //   //printf("%s\n", json);
+  //   char *sample_data=malloc(1024);
+  //   int16_t* value=(int16_t*)sample_data;
+    
+  //   if(sample_data==NULL){
+  //  		ESP_LOGE(TAG, "sample_data malloc failed");
+  //  		vTaskSuspend(NULL);
+  //  	}
+  //   //
+  //   uint8_t vad_cnt=0;
+  //   for(;;){
+  //   	hal_i2s_read(0,sample_data,1024,portMAX_DELAY);
+  //       if(vad_check(value,512)==1)
+  //       	vad_cnt++;
+  //       else
+  //       	vad_cnt=0;
+  //       if(vad_cnt==4){
+  //       	start_record_audio();
+  //       	break;
+  //       }
 
-    }
+  //   }
     
     //http_client_post("http://vop.baidu.com/server_api",&settings_null,NULL,json);
     //free(json);	
@@ -441,12 +377,11 @@ void baidu_rest_task(void *pvParameters)
    	// 	printf("%d:%d\n",i,sample_data[i]);
    	// }	
    	baid_http_post(&settings_null,NULL);
-
-
-    for(;;) {
-       hal_i2s_read(0,sample_data,1024,portMAX_DELAY);
-       vad_check(value,512);
-       hal_i2s_write(0,sample_data,1024,portMAX_DELAY);
-       //printf("cnt:%d\n",cnt++ );
-    }
+    vTaskDelete(NULL);
+    // for(;;) {
+    //    hal_i2s_read(0,sample_data,1024,portMAX_DELAY);
+    //    vad_check(value,512);
+    //    hal_i2s_write(0,sample_data,1024,portMAX_DELAY);
+    //    //printf("cnt:%d\n",cnt++ );
+    // }
 }
