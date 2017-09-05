@@ -21,9 +21,13 @@
 #include "url_parser.h"
 #include "spiram_fifo.h"
 #include "baidu_rest.h"
+#include "record_task.h"
 
 #define GPIO_OUTPUT_IO_0    16
 #define GPIO_OUTPUT_PIN_SEL  ((1<<GPIO_OUTPUT_IO_0))
+
+
+EventGroupHandle_t record_event_group;
 
 
 #define TAG "RECORD_TASK"
@@ -58,39 +62,49 @@ void record_task(void *pvParameters){
     gpio_config(&io_conf);
     //fifo init 
     spiRamFifoInit();
-    //call a buf
+    //call a buF
     char* sample_data=malloc(1024);
-    int16_t* value=(int16_t*)sample_data;
-    uint8_t vad_cnt=0;
-    for(;;){
-    	hal_i2s_read(0,sample_data,1024,portMAX_DELAY);
-        if(vad_check(value,512)==1)
-        	vad_cnt++;
-        else
-        	vad_cnt=0;
-        if(vad_cnt==5){
-        	//start_record_audio();
-        	break;
-        }
-    }
+    //wait the start event
+    xEventGroupWaitBits(record_event_group,RECORD_START,pdTRUE,pdTRUE,portMAX_DELAY);
+    // int16_t* value=(int16_t*)sample_data;
+    // uint8_t vad_cnt=0;
+    // for(;;){
+    // 	hal_i2s_read(0,sample_data,1024,portMAX_DELAY);
+    //     if(vad_check(value,512)==1)
+    //     	vad_cnt++;
+    //     else
+    //     	vad_cnt=0;
+    //     if(vad_cnt==5){
+    //     	//start_record_audio();
+    //     	break;
+    //     }
+    // }
+
     gpio_set_level(GPIO_OUTPUT_IO_0,1);
     ESP_LOGI(TAG, "start record");
     record_cnt=1;
+    EventBits_t uxBits;
     //call http api task
-    xTaskCreate(baidu_rest_task, "baidu_rest_task", 8192, NULL, 5, NULL);
+    xTaskCreate(baidu_rest_task, "baidu_rest_task", 8192, NULL, 6, NULL);
     while(1){
     	hal_i2s_read(0,sample_data,1024,portMAX_DELAY);
     	spiRamFifoWrite(sample_data,1024);
-    	if(vad_check(value,512)==0)
-			vad_cnt++;
-		else
-			vad_cnt=0;
-		if(vad_cnt>5){
-			record_cnt=0;
-			break;
-		}
+  //   	if(vad_check(value,512)==0)
+		// 	vad_cnt++;
+		// else
+		// 	vad_cnt=0;
+		// if(vad_cnt>5){
+		// 	record_cnt=0;
+		// 	break;
+		// }
+        uxBits=xEventGroupWaitBits(record_event_group,RECORD_STOP,pdFALSE,pdTRUE,0);
+        if((uxBits & RECORD_STOP)!=0){
+            //find the record stop event
+            break;
+        }
 	}
 	gpio_set_level(GPIO_OUTPUT_IO_0,0);
+    ESP_LOGI(TAG, "stop record");
 	free(sample_data);
 	vTaskDelete(NULL);	
 }
