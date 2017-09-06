@@ -17,6 +17,7 @@
 #include "http.h"
 #include "webserver.h"
 #include "cJSON.h"
+#include "record_task.h"
 #define TAG "webserver:"
 
 
@@ -87,6 +88,7 @@ typedef struct
 
 void web_index(http_parser* a,char*url,char* body);
 void led_ctrl(http_parser* a,char*url,char* body);
+void record_ctrl(http_parser* a,char*url,char* body);
 void load_logo(http_parser* a,char*url,char* body);
 void load_esp32(http_parser* a,char*url,char* body);
 
@@ -94,6 +96,7 @@ static void not_find();
 const HttpHandleTypeDef http_handle[]={
 	{"/",web_index},
 	{"/api/led/",led_ctrl},
+  {"/api/record/",record_ctrl},
 	{"/static/logo.png",load_logo},
 	{"/static/esp32.png",load_esp32},
 };
@@ -151,7 +154,38 @@ void web_index(http_parser* a,char*url,char* body){
   	free(request);
   	return_file("/sdcard/www/index.html");
 }
-
+extern char rsa_result[256];
+void record_ctrl(http_parser* a,char*url,char* body){
+  char *request;
+  asprintf(&request,RES_HEAD,"application/json");//json
+  write(client_fd, request, strlen(request));
+  free(request);
+  cJSON *root=NULL;
+  root= cJSON_Parse(http_body);
+  uint8_t record=cJSON_GetObjectItem(root,"record")->valueint;
+  cJSON_Delete(root);
+  root=NULL;
+  root=cJSON_CreateObject();
+  if(root==NULL){
+    ESP_LOGI(TAG,"cjson root create failed\n");
+    return NULL;
+  }
+  cJSON_AddNumberToObject(root,"err",0);
+  if(record)
+    xEventGroupSetBits(record_event_group, RECORD_START);
+  else{
+    xEventGroupSetBits(record_event_group, RECORD_STOP);
+    xEventGroupWaitBits(record_event_group,RECORD_DONE,pdTRUE,pdTRUE,portMAX_DELAY);
+    cJSON_AddStringToObject(root,"content",rsa_result);
+  }
+  char* out = cJSON_PrintUnformatted(root);
+  sprintf(chunk_len,"%x\r\n",strlen(out));
+  write(client_fd, chunk_len, strlen(chunk_len));
+  write(client_fd, out, strlen(out));
+  write(client_fd,"\r\n",2);
+  chunk_end(client_fd);
+  cJSON_Delete(root);
+}
 void led_ctrl(http_parser* a,char*url,char* body){
 	char *request;
   	asprintf(&request,RES_HEAD,"application/json");//json
@@ -169,20 +203,12 @@ void led_ctrl(http_parser* a,char*url,char* body){
 		return NULL;
 	}
 	cJSON_AddNumberToObject(root,"err",0);
-	// cJSON_AddStringToObject(root,"cuid","esp32_whyengineer");
-	// cJSON_AddStringToObject(root,"token",access_token);
-	// cJSON_AddNumberToObject(root, "rate", 8000);
-	// cJSON_AddNumberToObject(root, "channel", 1);
-	// cJSON_AddNumberToObject(root, "len", len);
-	// cJSON_AddStringToObject(root,"speech",speech);
 	char* out = cJSON_PrintUnformatted(root);
 	sprintf(chunk_len,"%x\r\n",strlen(out));
 	write(client_fd, chunk_len, strlen(chunk_len));
 	write(client_fd, out, strlen(out));
-  	write(client_fd,"\r\n",2);
-  	chunk_end(client_fd);
-	//send(client,out,strlen(out),MSG_WAITALL);
-	//printf("handle_return: %s\n", out);
+  write(client_fd,"\r\n",2);
+  chunk_end(client_fd);
 	cJSON_Delete(root);
 }
 

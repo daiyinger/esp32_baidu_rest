@@ -21,9 +21,11 @@
 #include "url_parser.h"
 #include "mbedtls/base64.h"
 #include "spiram_fifo.h"
+#include "record_task.h"
 
 #define TAG "REST:"
 
+char rsa_result[256];
 
 uint32_t http_body_length=0;
 char* http_body=NULL;
@@ -65,8 +67,12 @@ static int body_done_callback (http_parser* a){
     int err_no;
     err_no=cJSON_GetObjectItem(root,"err_no")->valueint;
     ESP_LOGI(TAG,"err_msg:%d",err_no);
+    //char* result=cJSON_GetObjectItem(root,"result")->valuestring;
+    //ESP_LOGI(TAG,"result:%s",result);
+    memcpy(rsa_result,http_body,strlen(http_body));
     cJSON_Delete(root);
     ESP_LOGI(TAG,"received body:%s",http_body);
+    xEventGroupSetBits(record_event_group, RECORD_DONE);
     free(http_body);
     return 0;
 }
@@ -83,7 +89,6 @@ static http_parser_settings settings_null =
     ,.on_chunk_header = 0
     ,.on_chunk_complete = 0
 };
-
 #define MAX_LENGTH 8*1000*16*10  //base64 8k 16bits 40s 
 const char* stream_head="{\"format\":\"wav\",\"cuid\":\"esp32_whyengineer\",\"token\":\"24.44810154581d4b7e8cc3554c90b949f0.2592000.1505980562.282335-10037482\",\"rate\":8000,\"channel\":1,\"speech\":\"";//","len":0,}"
 static int baid_http_post(http_parser_settings *callbacks, void *user_data)
@@ -172,8 +177,13 @@ static int baid_http_post(http_parser_settings *callbacks, void *user_data)
     	ESP_LOGE(TAG,"read_buf malloc failed!");
     	return ESP_FAIL;
     }
-    extern int32_t record_cnt;
-    while(record_cnt){
+    EventBits_t uxBits;
+    while(1){
+      uxBits=xEventGroupWaitBits(record_event_group,RECORD_STOP,pdTRUE,pdTRUE,0);
+      if((uxBits & RECORD_STOP)!=0){
+            //find the record stop event
+            break;
+      }
     	spiRamFifoRead((char*)read_buf, 1026);
     	wav_len+=1026;
     	if(mbedtls_base64_encode(dst_buf,1369,&olen,read_buf,1026)){

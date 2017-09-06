@@ -31,7 +31,6 @@ EventGroupHandle_t record_event_group;
 
 
 #define TAG "RECORD_TASK"
-int32_t record_cnt;
 void record_task(void *pvParameters){
 
 	//codec init
@@ -82,7 +81,6 @@ void record_task(void *pvParameters){
 
     gpio_set_level(GPIO_OUTPUT_IO_0,1);
     ESP_LOGI(TAG, "start record");
-    record_cnt=1;
     EventBits_t uxBits;
     //call http api task
     xTaskCreate(baidu_rest_task, "baidu_rest_task", 8192, NULL, 6, NULL);

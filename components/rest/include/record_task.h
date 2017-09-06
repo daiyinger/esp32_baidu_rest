@@ -7,7 +7,7 @@
 
 #define RECORD_START BIT0
 #define RECORD_STOP  BIT1
-
+#define RECORD_DONE  BIT2
 
 extern EventGroupHandle_t record_event_group;
 void record_task(void *pvParameters);
