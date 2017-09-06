@@ -30,6 +30,7 @@
 #include "hal_i2s.h"
 #include "wm8978.h"
 #include "record_task.h"
+#include "webserver.h"
 #include "http.h"
 #include "cJSON.h"
 
@@ -49,23 +50,6 @@ void app_main()
     nvs_flash_init();
     tcpip_adapter_init();
     wifi_init_sta();
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
-    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = true,
-        .max_files = 5
-    };
-    sdmmc_card_t* card;
-    err = esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot_config, &mount_config, &card);
-    if (err != ESP_OK) {
-        if (err == ESP_FAIL) {
-            printf("Failed to mount filesystem. If you want the card to be formatted, set format_if_mount_failed = true.");
-        } else {
-            printf("Failed to initialize the card (%d). Make sure SD card lines have pull-up resistors in place.", err);
-        }
-        return;
-    }
-    sdmmc_card_print_info(stdout, card);
     // /*eth_init();
     //do{
     //gpio_set_level(GPIO_OUTPUT_IO_0, 0);
@@ -83,8 +67,9 @@ void app_main()
         ESP_LOGI(TAG, "ETHPGW:"IPSTR, IP2STR(&ip.gw));
         ESP_LOGI(TAG, "~~~~~~~~~~~");
     }
-
+    record_event_group=xEventGroupCreate();
     xTaskCreate(record_task, "record_task", 4096, NULL, 5, NULL);
+    xTaskCreate(webserver_task, "web_server_task", 8196, NULL, 4, NULL);
         //xEventGroupWaitBits(eth_event_group,ETH_DISCONNECTED_BIT,pdTRUE,pdTRUE,portMAX_DELAY);
     //}while(1);
     //if(create_tcp_server(8080)!=ESP_OK){
