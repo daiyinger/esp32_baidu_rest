@@ -19,3 +19,5 @@ the delay about 1s.
 
 ## how to use 
 change the componets/espressif/wifi.c wifi ssid and password
+
+copy the www folder to sd / directory
